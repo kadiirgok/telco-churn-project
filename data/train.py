@@ -1,12 +1,51 @@
 ## Data içe aktarma
 import pandas as pd 
+import pandas as pd
+from sklearn.impute import SimpleImputer
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, classification_report, f1_score, precision_score, recall_score
+from sklearn.model_selection import GridSearchCV
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
+
+
+
+
+## Verinin Okunması 
 path = "telco.csv"
 df = pd.read_csv(path)
-
-
-
 print("-"*30+"Data Type"+"-"*30)
-df.info()                        # Tablo tiplerini görme
+df.info() 
+
+
+#Outlier Değerler
+class IQRClipper(BaseEstimator, TransformerMixin):
+    # Bu class'ı sadece 2 "an" olarak düşünün:
+    #   1) fit()      -> SADECE train verisine bakıp sınırları hesaplar, hafızaya yazar
+    #   2) transform() -> hafızadaki sınırları kullanarak veriyi kırpar (train'e de test'e de aynı sınırlarla)
+
+    def fit(self, X, y=None):
+        X = pd.DataFrame(X)
+        self.kolonlar_ = [c for c in X.columns if X[c].nunique() > 2]  # sadece sürekli kolonlar
+        Q1 = X[self.kolonlar_].quantile(0.25)
+        Q3 = X[self.kolonlar_].quantile(0.75)
+        IQR = Q3 - Q1
+        self.alt_ = Q1 - 1.5 * IQR   # <-- öğrenilen bilgi burada saklanıyor
+        self.ust_ = Q3 + 1.5 * IQR   # <-- öğrenilen bilgi burada saklanıyor
+        return self
+
+    def transform(self, X):
+        X = pd.DataFrame(X).copy()
+        for kolon in self.kolonlar_:
+            X[kolon] = X[kolon].clip(lower=self.alt_[kolon], upper=self.ust_[kolon])
+        return X.values                       # Tablo tiplerini görme
+
 
 #Fonksiyonlar
 def kolon_kesfetme(kolonlar):
@@ -45,62 +84,11 @@ def one_encondig(kolon_adi):
     print(f"Güncel toplam kolon sayısı {df.shape[1]}")
 
 
-#outlier tespit etme 
-# outlier tespit etme (Düzeltilmiş Hali)
-def outlier_temizle_ve_baskila(kolonlar):
-  for kolon in kolonlar:
-    # Sadece sayısal kolonlarda çalış
-    if df[kolon].dtype in ["int64", "float64"]:
-      Q1 = df[kolon].quantile(0.25)
-      Q3 = df[kolon].quantile(0.75)
-      IQR = Q3 - Q1
-
-      alt_sinir = Q1 - 1.5 * IQR
-      ust_sinir = Q3 + 1.5 * IQR
-
-      # Sınırların dışındakileri baskıla (Clipping)
-      # Alt sınırdan düşük olanları alt sınıra, üst sınırdan yüksek olanları üst sınıra eşitle
-      df[kolon] = df[kolon].clip(lower=alt_sinir, upper=ust_sinir)
-      print(
-          f"'{kolon}' kolonundaki aykırı değerler alt ({alt_sinir:.2f}) ve üst"
-          f" ({ust_sinir:.2f}) sınırlarına baskılandı."
-      )
 
 
 
-#Outlier Baskılama 
-print("Outlier Değerler Kontrol ediliyor...")
-# Sadece sayısal (int ve float) kolonları otomatik seç
-sayisal_kolonlar = df.select_dtypes(include=["number"]).columns
 
-for kolon in sayisal_kolonlar:
-  # Eğer hedef değişkenimiz (Churn veya 0-1 olan kolon) varsa onu outlier analizinden hariç tutalım
-  if kolon == "Churn":
-    continue
 
-  Q1 = df[kolon].quantile(0.25)
-  Q3 = df[kolon].quantile(0.75)
-  IQR = Q3 - Q1
-
-  alt_sinir = Q1 - 1.5 * IQR
-  ust_sinir = Q3 + 1.5 * IQR
-
-  # Sınırların dışında kalan kaç tane değer var kontrol edelim
-  aykiri_sayisi = df[
-      (df[kolon] < alt_sinir) | (df[kolon] > ust_sinir)
-  ].shape[0]
-
-  if aykiri_sayisi > 0:
-    print(
-        f"'{kolon}' kolonunda {aykiri_sayisi} adet aykırı değer tespit edildi."
-        " Baskılanıyor..."
-    )
-    # Veriyi silmek yerine sınırların içine çekiyoruz (Clipping)
-    df[kolon] = df[kolon].clip(lower=alt_sinir, upper=ust_sinir)
-  else:
-    print(f"'{kolon}' kolonunda aykırı değer bulunamadı.")
-
-print("--- Outlier Temizliği Tamamlandı ---\n")
 
 #Genel Bilgi 
 print("---Tablo İnt Çevirilmiş Hali Genel Bilgi---")
@@ -110,32 +98,29 @@ print(df.select_dtypes(include=['int64', 'float64']).describe()) # genel bilgile
 # Encoing yapma
 print("Encoidng yapılıyor...")
 categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
-
 for col in categorical_cols:
   if col == 'customerID':
     kolon_silme([col])  # Costumer id direk sil
     continue
-
-  # TotalCharges sütununu yakala, sayısal tipe çevir ve döngüden çıkar
   if col == 'TotalCharges':
     df['TotalCharges'] = pd.to_numeric(df['TotalCharges'], errors='coerce')
-    # Boş kalan (NaN) değerleri medyan ile dolduralım ki patlamasın
-    df['TotalCharges'] = df['TotalCharges'].fillna(
-        df['TotalCharges'].median()
-    )
-    print("'TotalCharges' kolonu sayısal (float) tipe dönüştürüldü.")
-    continue  # Artık bu döngü turunu burada bitiriyoruz, encoding'e sokmuyoruz!
-
-  # Benzersiz değer sayısına bak
+    print("'TotalCharges' kolonu sayısal (float) tipe dönüştürüldü (fillna sonraya bırakıldı).")
+    continue      
   unique_count = df[col].nunique()
-
-  # Eğer tam 2 seçenek varsa binary dönüştürürüz
   if unique_count == 2:
     binary_donusturucu([col])
-
-  # Eğer 2'den fazlaysa One-Hot Encoding uygularız
   elif unique_count > 2:
     one_encondig(col)
+
+
+
+## Verinin X ve Y olarak ayrılması 
+y= df['Churn']
+X = df.drop('Churn' , axis=1)
+X_tr , X_te , y_tr , y_te = train_test_split(
+    X,y , test_size=0.2 , random_state=42 , stratify=y
+)
+
 
 #Corr ilşkisi kontrol ediliyor 
 import matplotlib.pyplot as plt
@@ -143,34 +128,24 @@ import pandas as pd
 import seaborn as sns
 from sklearn.ensemble import RandomForestClassifier
 
-# 1. Hedef sütununuzun adını buraya yazın
-hedef_sutun = "Churn"
+X_num_tr = X_tr.select_dtypes(include=["number"]).copy()
+X_num_tr = X_num_tr.fillna(X_num_tr.median())   # sadece bu grafik için geçici doldurma
 
-# 2. X ve y olarak veriyi ayırın
-X = df.drop(columns=[hedef_sutun])
-y = df[hedef_sutun]
-
-# Sadece sayısal sütunlarla çalışalım
-X_num = X.select_dtypes(include=["number"])
-
-# 3. Random Forest modeli kurup fit edelim
 model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
-model.fit(X_num, y)
+model.fit(X_num_tr, y_tr)   # sadece train
 
 # 4. Tablo haline getir ve sırala
 feature_importance = pd.DataFrame(
-    {"Degisken": X_num.columns, "Onem_Derecesi": model.feature_importances_}
+    {"Degisken": X_num_tr.columns, "Onem_Derecesi": model.feature_importances_}
 ).sort_values(by="Onem_Derecesi", ascending=False)
 
 # Konsol çıktısı
 print("Müşteri Kaybını Etkileyen En Önemli Faktörler:")
 print(feature_importance.head(25))
 
-# 5. Görselleştirme - Profesyonel ve Cezbedici Tasarım
 plt.figure(figsize=(14, 9))
 top_features = feature_importance.head(15).copy()  # İlk 15 en net görünenidir
 
-# Modern bir tema ve renk paleti seçelim
 sns.set_theme(style="whitegrid")
 ax = sns.barplot(
     x="Onem_Derecesi",
@@ -221,52 +196,53 @@ plt.close()
 #Model Eğitme Ksımı
 print("Model Eğitiliyor...")
 #Model Seçme Değerlendirme 
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, classification_report, f1_score, precision_score, recall_score
-from sklearn.model_selection import GridSearchCV
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.svm import SVC
-from sklearn.model_selection import train_test_split
-
-y= df['Churn']
-X = df.drop('Churn' , axis=1)
-
-
-X_tr , X_te , y_tr , y_te = train_test_split(
-    X,y , test_size=0.2 , random_state=42 , stratify=y
-)
-
-
-
-
 models = {
     'LogisticRegression': (
-        Pipeline([('sc', StandardScaler()), ('m', LogisticRegression(max_iter=1000))]),
+        Pipeline([
+            ('impute', SimpleImputer(strategy='median')),
+            ('clip', IQRClipper()),
+            ('sc', StandardScaler()),
+            ('m', LogisticRegression(max_iter=1000, class_weight='balanced'))
+        ]),
         {'m__C': [0.1, 1, 10]},
     ),
     'KNN': (
-        Pipeline([('sc', StandardScaler()), ('m', KNeighborsClassifier())]),
+        Pipeline([
+            ('impute', SimpleImputer(strategy='median')),
+            ('clip', IQRClipper()),
+            ('sc', StandardScaler()),
+            ('m', KNeighborsClassifier())   # class_weight yok, KNN'de bu parametre desteklenmiyor
+        ]),
         {'m__n_neighbors': [3, 5, 7, 11]},
     ),
     'DecisionTree': (
-        Pipeline([('m', DecisionTreeClassifier(random_state=42))]),
+        Pipeline([
+            ('impute', SimpleImputer(strategy='median')),
+            ('clip', IQRClipper()),
+            ('m', DecisionTreeClassifier(random_state=42, class_weight='balanced'))
+        ]),
         {'m__max_depth': [3, 5, 10, None]},
     ),
     'RandomForest': (
-        Pipeline([('m', RandomForestClassifier(random_state=42, n_jobs=-1))]),
+        Pipeline([
+            ('impute', SimpleImputer(strategy='median')),
+            ('clip', IQRClipper()),
+            ('m', RandomForestClassifier(random_state=42, n_jobs=-1, class_weight='balanced'))
+        ]),
         {'m__n_estimators': [50, 100, 200], 'm__max_depth': [5, 10, None]},
     ),
     'SVM': (
-        Pipeline([('sc', StandardScaler()), ('m', SVC())]),
+        Pipeline([
+            ('impute', SimpleImputer(strategy='median')),
+            ('clip', IQRClipper()),
+            ('sc', StandardScaler()),
+            ('m', SVC(class_weight='balanced',probability=True))
+        ]),
         {'sc__with_mean': [True, False], 'm__C': [0.1, 1, 10], 'm__kernel': ['rbf', 'linear']},
     ),
 }
 
-# 1. DEĞİŞİKLİK: Döngünün hemen üstüne modelleri saklamak için boş bir sözlük ekleyin
+##Modelin Eğitilmesi Ve Karşılaştırması
 egitilen_modeller = {}
 
 results = []
@@ -279,52 +255,62 @@ for name, (p, params) in models.items():
         'Test F1':    g.score(X_te, y_te),
         'Best Params': g.best_params_,
     })
-    # 2. DEĞİŞİKLİK: Her modelin eğitilmiş halini ismini anahtar yaparak sözlüğe kaydedin
     egitilen_modeller[name] = g.best_estimator_
 
-# Sizin orijinal tablonuz (Sıralamayı isterseniz 'Test F1'e göre de değiştirebilirsiniz)
 df_sonuc = pd.DataFrame(results).sort_values('Best CV F1', ascending=False)
 print("\n🏆 Model Karşılaştırma — ML-04 Modül Final")
 print("=" * 70)
 print(df_sonuc[['Model', 'Best CV F1', 'Test F1']].to_string(index=False))
 print("\nEn iyi modelin parametreleri:")
 print(f"  {df_sonuc.iloc[0]['Model']}: {df_sonuc.iloc[0]['Best Params']}")
-
-
-# 3. DEĞİŞİKLİK: 'g.best_estimator_' yerine tablonun 0. indeksindeki (en üstteki) modeli çağırın
 en_iyi_model_ismi = df_sonuc.iloc[0]['Model']
 en_iyi_model = egitilen_modeller[en_iyi_model_ismi]
 
-# Kodun geri kalan tahmin ve metrik hesaplama kısımları orijinal haliyle aynen devam eder:
+
+
+##Olasılık Tahmini Ve Eşik 
+
+y_proba = en_iyi_model.predict_proba(X_te)[:, 1]
 y_pred = en_iyi_model.predict(X_te)
 
-
-
 print("="*70)
-print("---Genel Değerlendirme --- ")
-# Her bir metriği ayrı ayrı hesaplıyoruz
-acc = accuracy_score(y_te, y_pred)
-prec = precision_score(y_te, y_pred)
-rec = recall_score(y_te, y_pred)
-f1 = f1_score(y_te, y_pred)
 
-print(f"Accuracy (Doğruluk): {acc:.4f}")
-print(f"Precision (Hassasiyet): {prec:.4f}")
-print(f"Recall (Duyarlılık / Kaçak Yakalama): {rec:.4f}")
-print(f"F1-Score (Dengeli Skor): {f1:.4f}")
+# --- ÖNCE: farklı eşikleri dene ---
+print("\n--- FARKLI EŞİKLERLE KARŞILAŞTIRMA ---")
+esikler = [0.5, 0.4, 0.3, 0.2]
+for esik in esikler:
+    y_pred_esik = (y_proba >= esik).astype(int)
+    p = precision_score(y_te, y_pred_esik)
+    r = recall_score(y_te, y_pred_esik)
+    f = f1_score(y_te, y_pred_esik)
+    print(f"Eşik={esik:.1f} -> Precision={p:.3f}, Recall={r:.3f}, F1={f:.3f}")
 
-# Veya tek satırda hepsini tablo şeklinde veren efsane komut:
-print("\n--- DETAYLI SINIFLANDIRMA RAPORU ---")
-print(classification_report(y_te, y_pred))
+# --- SONRA: tabloya bakarak eşiği seç ---
+secilen_esik = 0.3   # tabloya bakıp recall ~0.78'e en yakın olanı seçtik
+y_pred_final = (y_proba >= secilen_esik).astype(int)
+
+print(f"\n--- Seçilen eşik ({secilen_esik}) ile Genel Değerlendirme ---")
+acc = accuracy_score(y_te, y_pred_final)
+prec = precision_score(y_te, y_pred_final)
+rec = recall_score(y_te, y_pred_final)
+f1 = f1_score(y_te, y_pred_final)
+
+print(f"Accuracy: {acc:.4f}")
+print(f"Precision: {prec:.4f}")
+print(f"Recall: {rec:.4f}")
+print(f"F1-Score: {f1:.4f}")
+
+print("\n--- DETAYLI SINIFLANDIRMA RAPORU (seçilen eşik ile) ---")
+print(classification_report(y_te, y_pred_final))
 
 
-#Model Hata ve Yanılma Payı 
+#Hata Anlaizi ( Kaçan Müşteri )
 import pandas as pd
 
 # Test verisini ve tahminleri birleştiriyoruz
 analiz_df = X_te.copy()
 analiz_df['Gercek_Churn'] = y_te.values
-analiz_df['Modelin_Tahmini'] = y_pred
+analiz_df['Modelin_Tahmini'] = y_pred_final   # y_pred değil — seçtiğiniz eşiğin tahminini kullanın
 
 # Modelin kaçırdığı müşteriler (False Negative - En tehlikelisi)
 kacanlar = analiz_df[(analiz_df['Gercek_Churn'] == 1) & (analiz_df['Modelin_Tahmini'] == 0)]
@@ -336,5 +322,18 @@ print(f"Modelin fark edemediği kaçak müşteri sayısı: {len(kacanlar)}")
 print("\n--- Kaçırılan Müşterilerin Ortalamaları ---")
 print(kacanlar.select_dtypes(include=["number"]).mean())
 
+from sklearn.metrics import precision_score, recall_score, f1_score
+
+print("\n--- FARKLI EŞİKLERLE KARŞILAŞTIRMA ---")
+esikler = [0.5, 0.4, 0.3, 0.2]
+
+for esik in esikler:
+    y_pred_esik = (y_proba >= esik).astype(int)   # olasılık >= eşik ise 1, değilse 0
+    
+    p = precision_score(y_te, y_pred_esik)
+    r = recall_score(y_te, y_pred_esik)
+    f = f1_score(y_te, y_pred_esik)
+    
+    print(f"Eşik={esik:.1f} -> Precision={p:.3f}, Recall={r:.3f}, F1={f:.3f}")
 print("="*70)
 print("Tamamlandı..")
